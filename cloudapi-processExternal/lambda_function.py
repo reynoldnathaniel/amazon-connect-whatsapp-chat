@@ -1,8 +1,22 @@
 ## process whatsApp Cloud API message
+'''
+Functions Categories:
+    1. Chatbot Session Functions (Line 547)
+    2.  Messaging Functions (Line 212)
+    3. Contact Functions (Line 320)
+    4. Template Functions
+'''
 #To-Do:
+# Add dynamic param func, store in DYNAMODB (DONE not Tested)
+# Use Template for all MSGs
+# Make everything dynamic
+#   - send_msg_channel_func() --> add api to query 
+
 from ast import Eq
+from asyncio.windows_events import NULL
 import json
 from operator import eq
+from unittest import skip
 import boto3
 import os
 import sys
@@ -137,14 +151,42 @@ def lambda_handler(event, context):
                 print(translated_message)
 
                 # Lex v2 Runtime 
-                # If zh-CN --> zh_CN ; else en
-                response_lexv2 = lexv2_client.recognize_text(
-                    botId='X4JAXPOEDV',
-                    botAliasId='KL9JK9ZBXP',
-                    localeId=chatbot_language,
-                    sessionId=phone[1:],
-                    text=translated_message,
-                )
+                # DynamoDB Session already created by checkWhatsAppSession\
+
+                sessionState = getLexCurrentSessionState(phone[1:],chatbot_language) 
+                # sessionState used in sendMSG channel
+                if (sessionState == "None" or sessionState == "ConfirmIntent"):
+                    print("Session: {}".format(sessionState))
+
+                # directly activate recognize_text
+                    response_lexv2 = lexv2_client.recognize_text(
+                        botId='X4JAXPOEDV',
+                        botAliasId='KL9JK9ZBXP',
+                        localeId=chatbot_language,
+                        sessionId=phone[1:],
+                        text=translated_message,
+                    )
+                                        
+                else:
+                    print("Update message & session to DynamoDB")
+                    sessionState = sessionState.split("#")
+                    dynamoDB_State = sessionState[0] 
+                    dynamoDB_slot2Elict = sessionState[1]
+                    dynamoDB_message = translated_message
+                    response_lexv2 = lexv2_client.recognize_text(
+                        botId='X4JAXPOEDV',
+                        botAliasId='KL9JK9ZBXP',
+                        localeId=chatbot_language,
+                        sessionId=phone[1:],
+                        text=translated_message,
+                    )
+                    # Function to update WhatsApp session in DynamoDB
+                    updateWhatsAppSessionParam(
+                        sessionId= phone[1:], 
+                        chatbot_language = chatbot_language,
+                        dynamoDB_slot2Elict= dynamoDB_slot2Elict,
+                        dynamoDB_message=dynamoDB_message
+                        )                   
                 intent_name = response_lexv2['sessionState']['intent']['name']
                 
                 if intent_name != 'HelpIntent':
@@ -203,60 +245,8 @@ def lambda_handler(event, context):
         'statusCode': 200,
         'body': json.dumps('All good!')
     }
-    
 
-def attach_file(fileUrl,whatsToken,fileName,fileType,ConnectionToken):
-    
-    fileContents = get_whats_media(fileUrl,whatsToken)
-    fileSize = sys.getsizeof(fileContents) - 33 ## Removing BYTES overhead
-    print("Size downloaded:" + str(fileSize))
-    try:
-        attachResponse = participant_client.start_attachment_upload(
-        ContentType=fileType,
-        AttachmentSizeInBytes=fileSize,
-        AttachmentName=fileName,
-        ConnectionToken=ConnectionToken
-        )
-    except ClientError as e:
-        print("Error while creating attachment")
-        if(e.response['Error']['Code'] =='AccessDeniedException'):
-            print(e.response['Error'])
-            raise e
-        elif(e.response['Error']['Code'] =='ValidationException'):
-            print(e.response['Error'])
-            return None
-    else:
-        try:
-            filePostingResponse = requests.put(attachResponse['UploadMetadata']['Url'], 
-            data=fileContents,
-            headers=attachResponse['UploadMetadata']['HeadersToInclude'])
-        except ClientError as e:
-            print("Error while uploading")
-            print(e.response['Error'])
-            raise e
-        else:
-            print(filePostingResponse.status_code) 
-            verificationResponse = participant_client.complete_attachment_upload(
-                AttachmentIds=[attachResponse['AttachmentId']],
-                ConnectionToken=ConnectionToken)
-            print("Verification Response")
-            print(verificationResponse)
-            return attachResponse['AttachmentId']
-
-def download_file(url):
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.content
-    else:
-        return None
-
-def upload_data_to_s3(bytes_data,bucket_name, s3_key):
-    s3_resource = boto3.resource('s3')
-    obj = s3_resource.Object(bucket_name, s3_key)
-    obj.put(ACL='private', Body=bytes_data)
-
-    s3_url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
-    return s3_url
+#---------------------------------------- Messaging Functions ----------------------#
 
 def send_message(message, name,connectionToken):
     
@@ -268,7 +258,7 @@ def send_message(message, name,connectionToken):
         
     return response    
 
-def send_message_channel(userContact,channel,message, messageType,isConfirm,chatbot_language, textBody):
+def send_message_channel(userContact,channel,message, messageType,isConfirm,chatbot_language, textBody,response_lex):
     connect_config=json.loads(get_config(CONFIG_PARAMETER))
 
     # if(chatbot_language == "zh_CN"):
@@ -301,7 +291,7 @@ def send_message_channel(userContact,channel,message, messageType,isConfirm,chat
                  "to": userContact[1:],
                  "type": messageType,
                  "template": json.dumps({
-                    "name": "confirmintent",
+                    "name": "confirmintent", # change to getLexSession function
                     "language": {
                     "code": chatbot_language
                     },
@@ -361,6 +351,9 @@ def send_message_channel(userContact,channel,message, messageType,isConfirm,chat
     else:
         pass;
 
+#---------------------------------------- End of Messaging Functions ----------------------#
+
+#------------------- CONTACT Functions-------------------#
 def normalize_phone_channel(phone):
     ### Country specific changes required on phone numbers
     
@@ -509,6 +502,10 @@ def remove_contactId(contactId,table):
     else:
         return response
 
+#------------------- End of CONTACT Functions-------------------#
+
+
+# -------------------- Get Configs from Secrets Manager Function--------------------#
 def get_config(secret_name):
     # Create a Secrets Manager client
     session = boto3.session.Session()
@@ -549,7 +546,7 @@ def get_config(secret_name):
         else:
             secret = None
     return secret
-
+# -------------------- End of Get Configs from Secrets Manager Function--------------------#
 def normalize_phone(phone):
     ### Country specific changes required on phone numbers
     
@@ -585,6 +582,7 @@ def get_whats_media(url,whatsToken):
         return None
 
 
+#------------------- Chatbot Session Functions --------------------------------------------#
 def identify_Language(message):
     if re.search("[\u4e00-\u9FFF]", message):
         TranslateLanguageCode = 'zh_CN'
@@ -615,17 +613,18 @@ def checkWhatsAppSession(sessionId, chatbot_language): # get the previous locale
         whatsapp_no_item = None
         if  whatsapp_no_item == None:
             #put item: Creates a new item, or replaces an old item with a new item.
+            # Add params as list of map to record all parameters
             print("Create new session")
             whatsapp_table_put = dynamodb_client.put_item(
-            TableName="test-connect-whatsapp-session",
-            Item = {
-                "SessionId": {
-                    'S': sessionId #phone[1:]
-                },
-                "localeId": {
-                    'S': chatbot_language #translate_language
+                TableName="test-connect-whatsapp-session",
+                Item = {
+                    "SessionId": {
+                        'S': sessionId #phone[1:]
+                    },
+                    "localeId": {
+                        'S': chatbot_language #translate_language
+                    }
                 }
-            }
             )
         return {
             "isLocaleIdUpdated": False,
@@ -639,18 +638,26 @@ def checkWhatsAppSession(sessionId, chatbot_language): # get the previous locale
             "chatbot_language": localeId
         }
 
-def deleteWhatsAppSession(sessionId):
-    deleteResponse = dynamodb_client.delete_item(
-        TableName ='test-connect-whatsapp-session',
-        Key = {
-            "SessionId": {
-                'S': sessionId #phone[1:]
-            }
-        }
+def getLexCurrentSessionState(sessionId, chatbot_language):
+    # IF it is the first time updating the session
+    currentSession = lexv2_client.get_session(
+        botId = 'X4JAXPOEDV',
+        botAliasId = 'KL9JK9ZBXP',
+        localeId = chatbot_language,
+        sessionId = sessionId,
     )
+    try:
+        sessionState = currentSession['sessionState']['dialogAction']['type']
+        if sessionState == "ElicitSlot":
+            slot2Elict = sessionState["sessionState"]["dialogAction"]["slotToElicit"]
+            chatbotState = "#".join([sessionState,slot2Elict])
+        elif sessionState == "ConfirmIntent":
+            chatbotState = sessionState
+        return chatbotState
+    except:
+        return "None"
 
-'''
-def checkWhatsAppSession(sessionId, chatbot_language): # get the previous localeId
+def updateWhatsAppSessionParam(sessionId, chatbot_language, dynamoDB_slot2Elict, dynamoDB_message):
     # check if session exists
     whatsapp_table_get = dynamodb_client.get_item(
         TableName='test-connect-whatsapp-session',
@@ -660,60 +667,107 @@ def checkWhatsAppSession(sessionId, chatbot_language): # get the previous locale
             }
         }
     )
-    
-    print("Get item result: {}".format(whatsapp_table_get))
+    # Get old params from dynamoDB if have
+    # 
+    new_item = {
+                "M": {
+                        dynamoDB_slot2Elict: {
+                            "S": dynamoDB_message
+                        }
+                    }
+                }
+
     try:
-        whatsapp_table_get["Item"]["localeId"]
+        # Extract old items, append new item to the array
+        print("Slot items found")
+        slot_items = whatsapp_table_get['Item']['Params']["L"]
+        slot_items = slot_items.append(new_item)
+
     except KeyError:
-        whatsapp_no_item = None
-        if  whatsapp_no_item == None:
-            #put item: Creates a new item, or replaces an old item with a new item.
-            print("Create new session")
-            whatsapp_table_put = dynamodb_client.put_item(
-            TableName="test-connect-whatsapp-session",
-            Item = {
-                "SessionId": {
-                    'S': sessionId #phone[1:]
-                },
-                "localeId": {
-                    'S': chatbot_language #translate_language
-                }
+        print("No items found")
+        #update dynamoDB table directly
+        slot_items = new_item
+
+    # Put the new array back to DynamoDB
+    put_item_response = dynamodb_client.put_item(
+        TableName="test-connect-whatsapp-session",
+        Item = {
+            "SessionId": {
+                'S': sessionId #phone[1:]
+            },
+            "localeId": {
+                'S': chatbot_language #translate_language
+            },
+            "Params": {
+                'L': [slot_items] # list of map, use arr[-1] to get the last item
             }
-            )
-        return {
-            "isLocaleIdUpdated": False,
-            "chatbot_language": chatbot_language
         }
+    )
+
     
-    print("Retrieved localId: {}".format(whatsapp_table_get["Item"]["localeId"]))
-    if chatbot_language == 'number':
-        prev_localeId = whatsapp_table_get["Item"]["localeId"]['S']
-        print("detect numeric input, localeId unchanged")
-        return {
-            "isLocaleIdUpdated": False,
-            "chatbot_language": prev_localeId
-        }
-    elif chatbot_language != whatsapp_table_get["Item"]["localeId"]['S']:
-        # Change sth here to make the sessions consistent
-        whatsapp_table_put = dynamodb_client.put_item(
-            TableName="test-connect-whatsapp-session",
-            Item = {
-                "SessionId": {
-                    'S': sessionId #phone[1:]
-                },
-                "localeId": {
-                    'S': chatbot_language #translate_language
-                }
+
+def deleteWhatsAppSession(sessionId):
+    deleteResponse = dynamodb_client.delete_item(
+        TableName ='test-connect-whatsapp-session',
+        Key = {
+            "SessionId": {
+                'S': sessionId #phone[1:]
             }
+        }
+    )
+#-------------------End of Chatbot Session Functions --------------------------------------------#
+
+#---------------------- Useless Shit ----------------------------------------------#
+def attach_file(fileUrl,whatsToken,fileName,fileType,ConnectionToken):
+    
+    fileContents = get_whats_media(fileUrl,whatsToken)
+    fileSize = sys.getsizeof(fileContents) - 33 ## Removing BYTES overhead
+    print("Size downloaded:" + str(fileSize))
+    try:
+        attachResponse = participant_client.start_attachment_upload(
+        ContentType=fileType,
+        AttachmentSizeInBytes=fileSize,
+        AttachmentName=fileName,
+        ConnectionToken=ConnectionToken
         )
-        print("Update localeId for chatbot: {}".format(chatbot_language))
-        return {
-            "isLocaleIdUpdated": True,
-            "chatbot_language": chatbot_language
-        }
+    except ClientError as e:
+        print("Error while creating attachment")
+        if(e.response['Error']['Code'] =='AccessDeniedException'):
+            print(e.response['Error'])
+            raise e
+        elif(e.response['Error']['Code'] =='ValidationException'):
+            print(e.response['Error'])
+            return None
     else:
-        return {
-            "isLocaleIdUpdated": False,
-            "chatbot_language": chatbot_language
-        }
-'''
+        try:
+            filePostingResponse = requests.put(attachResponse['UploadMetadata']['Url'], 
+            data=fileContents,
+            headers=attachResponse['UploadMetadata']['HeadersToInclude'])
+        except ClientError as e:
+            print("Error while uploading")
+            print(e.response['Error'])
+            raise e
+        else:
+            print(filePostingResponse.status_code) 
+            verificationResponse = participant_client.complete_attachment_upload(
+                AttachmentIds=[attachResponse['AttachmentId']],
+                ConnectionToken=ConnectionToken)
+            print("Verification Response")
+            print(verificationResponse)
+            return attachResponse['AttachmentId']
+
+def download_file(url):
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.content
+    else:
+        return None
+
+def upload_data_to_s3(bytes_data,bucket_name, s3_key):
+    s3_resource = boto3.resource('s3')
+    obj = s3_resource.Object(bucket_name, s3_key)
+    obj.put(ACL='private', Body=bytes_data)
+
+    s3_url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
+    return s3_url
+#----------------------End of Useless Shit ----------------------------------------------#
