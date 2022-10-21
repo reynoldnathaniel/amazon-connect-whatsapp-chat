@@ -1,5 +1,8 @@
 ## process whatsApp Cloud API message
 #To-Do:
+# 1. test interactive list msg
+# 2. swtich chatbot to demo chatbot
+# 3. Continue
 from ast import Eq
 import json
 from operator import eq
@@ -161,7 +164,7 @@ def lambda_handler(event, context):
                         isConfirm = False
                         slot2Elict = response_lexv2["sessionState"]["dialogAction"]["slotToElicit"]
                         if (slot2Elict == "serviceOptions"):
-                            messageType = "template"
+                            messageType = "interactive"
                         else:
                             messageType = "text"
                     elif sessionState == "ConfirmIntent":
@@ -330,15 +333,48 @@ def send_message_channel(userContact,channel,message, messageType,isConfirm,chat
                 "type": "text",
                 "text": json.dumps({ "preview_url": False, "body": message})
             }
-        elif (messageType == "template"):
+        elif (messageType == "interactive"):
             data = {    
                         "messaging_product": "whatsapp",
                         "to": userContact[1:],
                         "type": messageType,
-                        "template": json.dumps({
-                            "name": "serviceoptions",
-                            "language": {
-                            "code": chatbot_language
+                        "interactive": json.dumps({
+                            "type": "list",
+                            "header": {
+                                "type": "text",
+                                "text": "Welcome to WeLend!"
+                            },
+                            "body":{
+                                "text": "Thank you for reaching out to WeLend, how can we help you?"  
+                            },
+                            "action": {
+                                "button": "Options",
+                                "sections":[
+                                    {
+                                        "rows":[
+                                            {
+                                                "title": "1. Enquiries related to Small and Medium Enterprise loan",
+                                                "id": "SME-loan-enquireis"
+                                            },
+                                            {
+                                                "title":"2. To check your application status",
+                                                "id": "application-status"
+                                            },
+                                            {
+                                                "title": "3. Information on signing your loan agreement",
+                                                "id": "load-info"
+                                            },
+                                            {
+                                                "title": "4. Payment information",
+                                                "id": "pay-info"
+                                            },
+                                            {
+                                                "title": "5. Talk to agent",
+                                                "id": "agent"
+                                            }
+                                        ]
+                                    }
+                                ]
                             }
                         })
                     }
