@@ -1,8 +1,9 @@
 ## process whatsApp Cloud API message
 #To-Do:
-# 1. test interactive list msg
+# 1. test interactive list msg (DONE)
 # 2. swtich chatbot to demo chatbot
-# 3. Continue
+# 3. setup chinese version and english version --> input the chatbot response + param as variable --> into the interaction template
+# 4. Continue
 from ast import Eq
 import json
 from operator import eq
@@ -64,6 +65,10 @@ def lambda_handler(event, context):
                 message = change['value']['messages'][0]['text']['body']
             elif (messageType == 'button'):
                 message = change['value']['messages'][0]["button"]["text"]
+            elif (messageType == 'interactive'):
+                replyType = change['value']['messages'][0]['interactive']['type']
+                message = change['value']['messages'][0]['interactive'][replyType]['id']
+                print("Interactive MSG: {}".format(message))
             else:
                 message = 'Attachment'
                 fileType = change['value']['messages'][0][messageType]['mime_type']
@@ -80,7 +85,7 @@ def lambda_handler(event, context):
                 print("Found contact")
                 try:
                     ##Handle media content
-                    if (messageType == 'button'):
+                    if (messageType == 'button' or messageType =='interactive'):
                         send_message_response = send_message(message, phone, contact['connectionToken'])
                     elif(messageType != 'text'):
                         print("Attaching document")
@@ -142,8 +147,8 @@ def lambda_handler(event, context):
                 # Lex v2 Runtime 
                 # If zh-CN --> zh_CN ; else en
                 response_lexv2 = lexv2_client.recognize_text(
-                    botId='X4JAXPOEDV',
-                    botAliasId='KL9JK9ZBXP',
+                    botId='LBZWCASU3V',
+                    botAliasId='BX84KD5ORN',
                     localeId=chatbot_language,
                     sessionId=phone[1:],
                     text=translated_message,
@@ -172,7 +177,7 @@ def lambda_handler(event, context):
                         messageType = "template"
                     
                     # -------------------------------------#
-                    send_message_channel(phone,channel,message,messageType,isConfirm,chatbot_language, response_lexv2)
+                    send_message_channel(phone,channel,message,isConfirm, response_lexv2)
                     if response_lexv2['sessionState']['dialogAction']['type'] == "Close":
                         deleteWhatsAppSession(phone[1:])
 
@@ -271,7 +276,7 @@ def send_message(message, name,connectionToken):
         
     return response    
 
-def send_message_channel(userContact,channel,message, messageType,isConfirm,chatbot_language, textBody):
+def send_message_channel(userContact,channel,message, isConfirm, responsePayload):
     connect_config=json.loads(get_config(CONFIG_PARAMETER))
 
     # if(chatbot_language == "zh_CN"):
@@ -298,85 +303,31 @@ def send_message_channel(userContact,channel,message, messageType,isConfirm,chat
         WHATS_TOKEN = connect_config['WHATS_TOKEN']
         URL = 'https://graph.facebook.com/v13.0/'+WHATS_PHONE_ID+'/messages'
         headers = {'Authorization': WHATS_TOKEN, 'Content-Type': 'application/json'}
+        msgJson = responseCardDecisionTree(responsePayload)
+        msgType = msgJson["payloadType"]
+        msgBody = msgJson["body"]
         # Data
-        if(isConfirm == True):
-            data =  {"messaging_product": "whatsapp",
-                 "to": userContact[1:],
-                 "type": messageType,
-                 "template": json.dumps({
-                    "name": "confirmintent",
-                    "language": {
-                    "code": chatbot_language
-                    },
-                    "components": [
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {
-                                    "type": "text",
-                                    "text": str(textBody["sessionState"]["intent"]["slots"]["borrowedMoney"]["value"]["resolvedValues"][0])
-                                },
-                                {
-                                    "type": "text",
-                                    "text": str(textBody["sessionState"]["intent"]["slots"]["month"]["value"]["resolvedValues"][0])
-                                }
-                            ]
-                        }
-                    ]
-                })
-                 }
+        if(isConfirm == True): # edit here
+            data =  {
+                        "messaging_product": "whatsapp",
+                        "to": userContact[1:],
+                        "type": msgType,
+                        "interactive": msgBody
+            }
 
-        elif(messageType == "text"):
+        elif(msgType == "text"):
             data = { 
                 "messaging_product": "whatsapp",
                 "to": normalize_phone_channel(userContact),
-                "type": "text",
-                "text": json.dumps({ "preview_url": False, "body": message})
+                "type": msgType,
+                "text": msgBody
             }
-        elif (messageType == "interactive"):
+        elif (msgType == "interactive"):
             data = {    
                         "messaging_product": "whatsapp",
                         "to": userContact[1:],
-                        "type": messageType,
-                        "interactive": json.dumps({
-                            "type": "list",
-                            "header": {
-                                "type": "text",
-                                "text": "Welcome to WeLend!"
-                            },
-                            "body":{
-                                "text": "Thank you for reaching out to WeLend, how can we help you?"  
-                            },
-                            "action": {
-                                "button": "Options",
-                                "sections":[
-                                    {
-                                        "rows":[
-                                            {
-                                                "title": "1. Enquiries related to Small and Medium Enterprise loan",
-                                                "id": "SME-loan-enquireis"
-                                            },
-                                            {
-                                                "title":"2. To check your application status",
-                                                "id": "application-status"
-                                            },
-                                            {
-                                                "title": "3. Information on signing your loan agreement",
-                                                "id": "load-info"
-                                            },
-                                            {
-                                                "title": "4. Payment information",
-                                                "id": "pay-info"
-                                            },
-                                            {
-                                                "title": "5. Talk to agent",
-                                                "id": "agent"
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        })
+                        "type": msgType,
+                        "interactive": msgBody
                     }
 
         else:
@@ -384,7 +335,8 @@ def send_message_channel(userContact,channel,message, messageType,isConfirm,chat
                 "messaging_product": "whatsapp",
                 "to": normalize_phone_channel(userContact),
                 "type": "text",
-                "text": json.dumps({ "preview_url": False, "body": message})
+                #"text": json.dumps({ "preview_url": False, "body": message})
+                "text": msgBody
             }
         print("Sending")
         print(data)
@@ -685,71 +637,194 @@ def deleteWhatsAppSession(sessionId):
         }
     )
 
-'''
-def checkWhatsAppSession(sessionId, chatbot_language): # get the previous localeId
-    # check if session exists
-    whatsapp_table_get = dynamodb_client.get_item(
-        TableName='test-connect-whatsapp-session',
-        Key= {
-            "SessionId": {
-                'S': sessionId #phone[1:]
-            }
-        }
-    )
-    
-    print("Get item result: {}".format(whatsapp_table_get))
+def responseCardDecisionTree(responsePayload):
+    message = responsePayload['messages'][0]['content']
     try:
-        whatsapp_table_get["Item"]["localeId"]
-    except KeyError:
-        whatsapp_no_item = None
-        if  whatsapp_no_item == None:
-            #put item: Creates a new item, or replaces an old item with a new item.
-            print("Create new session")
-            whatsapp_table_put = dynamodb_client.put_item(
-            TableName="test-connect-whatsapp-session",
-            Item = {
-                "SessionId": {
-                    'S': sessionId #phone[1:]
-                },
-                "localeId": {
-                    'S': chatbot_language #translate_language
-                }
-            }
-            )
+        buttonTitle = responsePayload["messages"][1]["imageResponseCard"]["title"]
+        buttonList = responsePayload["messages"][1]["imageResponseCard"]["buttons"]
+        print("Response card required")
+        msgPaylod = processSlot(responsePayload)
+        return msgPaylod
+    except IndexError:
+        print("No response card required")
+        msgPaylod = json.dumps({"preview_url": False, "body": message})
         return {
-            "isLocaleIdUpdated": False,
-            "chatbot_language": chatbot_language
+            "payloadType": "text",
+            "body": msgPaylod
         }
+
+def listORButton(responsePayload):
+    buttonList = responsePayload["messages"][1]["imageResponseCard"]["buttons"]
+    if (len(buttonList) >3):
+        msgType = "list"
+        return msgType
+    for idx in buttonList:
+        btnTitle = idx["text"]
+        if len(btnTitle) > 20:
+            msgType = "list"
+            print(msgType)
+            return msgType
+    msgType = "button"
+    return msgType
+
     
-    print("Retrieved localId: {}".format(whatsapp_table_get["Item"]["localeId"]))
-    if chatbot_language == 'number':
-        prev_localeId = whatsapp_table_get["Item"]["localeId"]['S']
-        print("detect numeric input, localeId unchanged")
-        return {
-            "isLocaleIdUpdated": False,
-            "chatbot_language": prev_localeId
-        }
-    elif chatbot_language != whatsapp_table_get["Item"]["localeId"]['S']:
-        # Change sth here to make the sessions consistent
-        whatsapp_table_put = dynamodb_client.put_item(
-            TableName="test-connect-whatsapp-session",
-            Item = {
-                "SessionId": {
-                    'S': sessionId #phone[1:]
+
+def processSlot(responsePayload):
+    message = responsePayload["messages"][0]["content"]
+    buttonTitle = responsePayload["messages"][1]["imageResponseCard"]["title"]
+    buttonList = responsePayload["messages"][1]["imageResponseCard"]["buttons"]
+    # check length of buttonList
+    msgType = listORButton(responsePayload)
+
+    wtsResponseCard = []
+
+    if (msgType == "list"):
+        for idx in buttonList:
+            btnTitle = idx["text"]
+            btnValue = idx["value"]
+            if(btnValue == "no need description"):
+                wtsResponseCard.append(
+                    {
+                        "title": btnTitle,
+                        "id": btnTitle,
+                    }
+                )
+            else:
+                wtsResponseCard.append(
+                    {
+                        "title": btnTitle,
+                        "id": btnTitle,
+                        "description": btnValue
+                    }
+                )
+        print(wtsResponseCard[0])
+        wtsMsgBody = {
+                "type": msgType, # if len(row) > 3, --> type = list else type = button
+                #"header": {
+                    # "type": "text",
+                    #"text": "Welcome to WeLend!"
+                # },
+                "body":{
+                    "text": message
                 },
-                "localeId": {
-                    'S': chatbot_language #translate_language
+                "action": {
+                    "button": buttonTitle,
+                    "sections":[
+                        {
+                            "rows": wtsResponseCard
+                        }
+                    ]
                 }
-            }
-        )
-        print("Update localeId for chatbot: {}".format(chatbot_language))
-        return {
-            "isLocaleIdUpdated": True,
-            "chatbot_language": chatbot_language
-        }
+        }        
+
     else:
-        return {
-            "isLocaleIdUpdated": False,
-            "chatbot_language": chatbot_language
+        for idx in buttonList:
+            btnTitle = idx["text"]
+            btnValue = idx["value"]
+            wtsResponseCard.append(
+                {
+                    "type": "reply",
+                    "reply":{
+                        "id": btnValue,
+                        "title": btnTitle
+                    }
+                }
+            )
+        print(wtsResponseCard[0])
+        wtsMsgBody = {
+                "type": msgType, # if len(row) > 3, --> type = list else type = button
+                "body":{
+                    "text": message
+                },
+                "action": {
+                    "buttons": wtsResponseCard
+                }
+        }         
+
+    return {
+        "payloadType": "interactive",
+        "body": json.dumps(wtsMsgBody)
         }
+
+
+
 '''
+     {    
+                        "messaging_product": "whatsapp",
+                        "to": userContact[1:],
+                        "type": messageType,
+                        "interactive": json.dumps({
+                            "type": "list", # if len(row) > 3, --> type = list else type = button
+                            "header": {
+                                "type": "text",
+                                "text": "Welcome to WeLend!"
+                            },
+                            "body":{
+                                "text": "Thank you for reaching out to WeLend, how can we help you?"  
+                            },
+                            "action": {
+                                "button": "Options",
+                                "sections":[
+                                    {
+                                        "rows":[
+                                            {
+                                                "title": "1. SME Loans", #13
+                                                "id": "Enquiries related to Small and Medium Enterprise loan",
+                                                "description": "Enquiries related to Small and Medium Enterprise loan"
+                                            },
+                                            {
+                                                "title":"2. Application Status", #21
+                                                "id": "Checking your application status",
+                                                "description": "Checking your application status"
+                                            },
+                                            {
+                                                "title": "3. Loan Agreement",
+                                                "id": "Information on signing your loan agreement",
+                                                "description": "Information on signing your loan agreement"
+                                            },
+                                            {
+                                                "title": "4. Payment information",
+                                                "id": "Payment information"
+                                            },
+                                            {
+                                                "title": "5. Talk to agent",
+                                                "id": "Talk to agent"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        })
+                    }
+
+
+
+
+TEMPLATE:
+ {"messaging_product": "whatsapp",
+                 "to": userContact[1:],
+                 "type": messageType,
+                 "template": json.dumps({
+                    "name": "confirmintent",
+                    "language": {
+                    "code": chatbot_language
+                    },
+                    "components": [
+                        {
+                            "type": "body",
+                            "parameters": [
+                                {
+                                    "type": "text",
+                                    "text": str(responsePayload["sessionState"]["intent"]["slots"]["borrowedMoney"]["value"]["resolvedValues"][0])
+                                },
+                                {
+                                    "type": "text",
+                                    "text": str(responsePayload["sessionState"]["intent"]["slots"]["month"]["value"]["resolvedValues"][0])
+                                }
+                            ]
+                        }
+                    ]
+                })
+                 }
+'''
+
