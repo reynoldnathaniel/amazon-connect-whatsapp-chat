@@ -4,6 +4,8 @@
 # 2. swtich chatbot to demo chatbot
 # 3. setup chinese version and english version --> input the chatbot response + param as variable --> into the interaction template
 # 4. Continue
+# import module
+import traceback
 from ast import Eq
 import json
 from operator import eq
@@ -77,6 +79,11 @@ def lambda_handler(event, context):
                 fileUrl = get_media_url(fileId,WHATS_TOKEN)
                 
                 print(fileType)
+                suffix = fileType.split("/")[1]
+                # add recognizeText API in here to signal Lex uploaded attachments --> 
+                fileContents = get_whats_media(fileUrl,WHATS_TOKEN)
+                upload_s3_response = upload_data_to_s3(fileContents, "welend-demo-1-bucket", "{}/document.{}".format(phone[1:], suffix), fileType)
+                print(upload_s3_response)
                         
 
             
@@ -92,6 +99,8 @@ def lambda_handler(event, context):
                         if(fileType in SUPPORTED_FILE_TYPES):
                             print("Supported format")
                             attachmentResponse = attach_file(fileUrl,WHATS_TOKEN,fileName,fileType,contact['connectionToken'])
+                            # Upload to S3
+
                         else:
                             print("Not supported format")
                             send_message_response = send_message(fileUrl, phone, contact['connectionToken'])
@@ -104,7 +113,7 @@ def lambda_handler(event, context):
                     start_chat_response = start_chat(message, phone, channel,CONTACT_FLOW_ID,INSTANCE_ID)
                     start_stream_response = start_stream(INSTANCE_ID, start_chat_response['ContactId'], SNS_TOPIC)
                     create_connection_response = create_connection(start_chat_response['ParticipantToken'])
-                    if(messageType == 'button'):
+                    if(messageType == 'button' or messageType == 'interactive'):
                         print("Message Type button detected, only update contact")
                     elif(messageType != 'text'):
                         print("Attaching document")
@@ -142,20 +151,47 @@ def lambda_handler(event, context):
                 )
 
                 translated_message = response_translate['TranslatedText']
-                print(translated_message)
+                print("Translated MSG: {}".format(translated_message))
 
+                # add get session check if confirmIntent + msg = yes / Intent = goToMainMenuIntent --> if so then
+                # try:
+                #     get_session_response = lexv2_client.get_session(
+                #          botId='LBZWCASU3V',
+                #          botAliasId='BX84KD5ORN',
+                #          localeId=chatbot_language,
+                #          sessionId=phone[1:]                   
+                #     )
+                #     print("Get Session:")
+                #     logger.info(get_session_response)
+                # if get_session_response['sessionState']['dialogAction']['type'] == "ConfirmIntent":
+                #     list_intent_response = lexv2_model.list_intents(
+                #         botId='LBZWCASU3V',aw c
+                #         botVersion='DRAFT',
+                #         localeId=chatbot_language,
+                #         filters =[
+                #             {
+                #                 "name": "goToMainMenuIntent",
+                #                 "value": ["menu"],
+                #                 "operator": "CO"
+                #             }
+                #         ]
+                #     )
+                #     print("Get list intent")
+                #     logger.info(list_intent_response)
+                # except ResourceNotFoundException:
+                #     print("No Lex session yet, proceed to create Lex Session")
                 # Lex v2 Runtime 
                 # If zh-CN --> zh_CN ; else en
                 response_lexv2 = lexv2_client.recognize_text(
-                    botId='LBZWCASU3V',
-                    botAliasId='BX84KD5ORN',
+                    botId='OLMYBW8DVF',
+                    botAliasId='Z8QRMOFFRB',
                     localeId=chatbot_language,
                     sessionId=phone[1:],
                     text=translated_message,
                 )
                 intent_name = response_lexv2['sessionState']['intent']['name']
                 
-                if intent_name != 'HelpIntent':
+                if intent_name != 'agentHelpIntent':
                     logger.info(response_lexv2)
                     if 'messages' in response_lexv2:
                         message = response_lexv2['messages'][0]['content'] # Chatbot response
@@ -164,20 +200,19 @@ def lambda_handler(event, context):
                     logger.info(message)
                     # ---Decide use response card or not---#
                     sessionState = response_lexv2['sessionState']['dialogAction']['type']
-                    isConfirm = False
                     if sessionState == "ElicitSlot":
-                        isConfirm = False
                         slot2Elict = response_lexv2["sessionState"]["dialogAction"]["slotToElicit"]
                         if (slot2Elict == "serviceOptions"):
                             messageType = "interactive"
                         else:
                             messageType = "text"
                     elif sessionState == "ConfirmIntent":
-                        isConfirm = True
-                        messageType = "template"
+                        print(sessionState)
+                        #if intent_name == "goToMainMenuIntent":
+                        #    print("Back to main menu")
                     
                     # -------------------------------------#
-                    send_message_channel(phone,channel,message,isConfirm, response_lexv2)
+                    send_message_channel(phone,channel,message, response_lexv2)
                     if response_lexv2['sessionState']['dialogAction']['type'] == "Close":
                         deleteWhatsAppSession(phone[1:])
 
@@ -193,7 +228,7 @@ def lambda_handler(event, context):
                 
                 print("Creating Connection")
                 print(create_connection_response)
-                if(messageType == "button"):
+                if(messageType == "button" or messageType =="interactive"):
                     print("Message type button, directly insert contact")
                 elif(messageType != 'text' or messageType != "button"):
                     print("Attaching document")
@@ -258,10 +293,10 @@ def download_file(url):
     else:
         return None
 
-def upload_data_to_s3(bytes_data,bucket_name, s3_key):
+def upload_data_to_s3(bytes_data,bucket_name, s3_key, contentType):
     s3_resource = boto3.resource('s3')
     obj = s3_resource.Object(bucket_name, s3_key)
-    obj.put(ACL='private', Body=bytes_data)
+    obj.put(ACL='private', Body=bytes_data, ContentType = contentType)
 
     s3_url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
     return s3_url
@@ -276,7 +311,7 @@ def send_message(message, name,connectionToken):
         
     return response    
 
-def send_message_channel(userContact,channel,message, isConfirm, responsePayload):
+def send_message_channel(userContact,channel,message, responsePayload):
     connect_config=json.loads(get_config(CONFIG_PARAMETER))
 
     # if(chatbot_language == "zh_CN"):
@@ -307,37 +342,19 @@ def send_message_channel(userContact,channel,message, isConfirm, responsePayload
         msgType = msgJson["payloadType"]
         msgBody = msgJson["body"]
         # Data
-        if(isConfirm == True): # edit here
-            data =  {
-                        "messaging_product": "whatsapp",
-                        "to": userContact[1:],
-                        "type": msgType,
-                        "interactive": msgBody
-            }
-
-        elif(msgType == "text"):
-            data = { 
-                "messaging_product": "whatsapp",
-                "to": normalize_phone_channel(userContact),
-                "type": msgType,
-                "text": msgBody
-            }
-        elif (msgType == "interactive"):
-            data = {    
-                        "messaging_product": "whatsapp",
-                        "to": userContact[1:],
-                        "type": msgType,
-                        "interactive": msgBody
-                    }
-
-        else:
-            data = { 
-                "messaging_product": "whatsapp",
-                "to": normalize_phone_channel(userContact),
-                "type": "text",
-                #"text": json.dumps({ "preview_url": False, "body": message})
-                "text": msgBody
-            }
+        data = { 
+            "messaging_product": "whatsapp",
+            "to": normalize_phone_channel(userContact),
+            "type": msgType,
+            msgType: msgBody
+        }
+        # elif (msgType == "interactive"):
+        #     data = {    
+        #                 "messaging_product": "whatsapp",
+        #                 "to": userContact[1:],
+        #                 "type": msgType,
+        #                 "interactive": msgBody
+        #             }
         print("Sending")
         print(data)
         response = requests.post(URL, headers=headers, data=data)
@@ -640,12 +657,17 @@ def deleteWhatsAppSession(sessionId):
 def responseCardDecisionTree(responsePayload):
     message = responsePayload['messages'][0]['content']
     try:
-        buttonTitle = responsePayload["messages"][1]["imageResponseCard"]["title"]
-        buttonList = responsePayload["messages"][1]["imageResponseCard"]["buttons"]
+        buttonLength = len(responsePayload["messages"])
+        buttonTitle = responsePayload["messages"][buttonLength-1]["imageResponseCard"]["title"]
+        buttonList = responsePayload["messages"][buttonLength-1]["imageResponseCard"]["buttons"]
         print("Response card required")
         msgPaylod = processSlot(responsePayload)
         return msgPaylod
-    except IndexError:
+
+    except (IndexError,KeyError) as error: #IndexError,
+        print(error)
+        #print("Traceback:")
+        traceback.print_exc()
         print("No response card required")
         msgPaylod = json.dumps({"preview_url": False, "body": message})
         return {
@@ -654,7 +676,8 @@ def responseCardDecisionTree(responsePayload):
         }
 
 def listORButton(responsePayload):
-    buttonList = responsePayload["messages"][1]["imageResponseCard"]["buttons"]
+    buttonLength = len(responsePayload["messages"])
+    buttonList = responsePayload["messages"][buttonLength-1]["imageResponseCard"]["buttons"]
     if (len(buttonList) >3):
         msgType = "list"
         return msgType
@@ -670,9 +693,20 @@ def listORButton(responsePayload):
     
 
 def processSlot(responsePayload):
-    message = responsePayload["messages"][0]["content"]
-    buttonTitle = responsePayload["messages"][1]["imageResponseCard"]["title"]
-    buttonList = responsePayload["messages"][1]["imageResponseCard"]["buttons"]
+    #message = responsePayload["messages"][0]["content"]
+    messageArr = []
+    for msg in responsePayload["messages"]:
+        if msg["contentType"] == "PlainText":
+            messageArr.append(msg["content"])
+    print("len:{}".format(len(messageArr)))
+    if len(messageArr) > 1:
+        message = "{}\n{}".format(messageArr[0],messageArr[1])
+    else:
+        message = messageArr[0]
+
+    buttonLength = len(responsePayload["messages"])
+    buttonTitle = responsePayload["messages"][buttonLength-1]["imageResponseCard"]["title"]
+    buttonList = responsePayload["messages"][buttonLength-1]["imageResponseCard"]["buttons"]
     # check length of buttonList
     msgType = listORButton(responsePayload)
 
