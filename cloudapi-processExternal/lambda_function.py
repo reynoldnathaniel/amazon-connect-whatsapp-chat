@@ -16,6 +16,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 import requests
 import re
+import logging
 
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.logging.formatter import LambdaPowertoolsFormatter
@@ -82,7 +83,7 @@ def lambda_handler(event, context):
                 suffix = fileType.split("/")[1]
                 # add recognizeText API in here to signal Lex uploaded attachments --> 
                 fileContents = get_whats_media(fileUrl,WHATS_TOKEN)
-                upload_s3_response = upload_data_to_s3(fileContents, "welend-demo-1-bucket", "{}/document.{}".format(phone[1:], suffix), fileType)
+                upload_s3_response = upload_data_to_s3(fileContents, "welend-demo-1-bucket-317786219129", "{}/document.{}".format(phone[1:], suffix), fileType)
                 print(upload_s3_response)
                         
 
@@ -153,46 +154,59 @@ def lambda_handler(event, context):
                 translated_message = response_translate['TranslatedText']
                 print("Translated MSG: {}".format(translated_message))
 
-                # add get session check if confirmIntent + msg = yes / Intent = goToMainMenuIntent --> if so then
-                # try:
-                #     get_session_response = lexv2_client.get_session(
-                #          botId='LBZWCASU3V',
-                #          botAliasId='BX84KD5ORN',
-                #          localeId=chatbot_language,
-                #          sessionId=phone[1:]                   
-                #     )
-                #     print("Get Session:")
-                #     logger.info(get_session_response)
-                # if get_session_response['sessionState']['dialogAction']['type'] == "ConfirmIntent":
-                #     list_intent_response = lexv2_model.list_intents(
-                #         botId='LBZWCASU3V',aw c
-                #         botVersion='DRAFT',
-                #         localeId=chatbot_language,
-                #         filters =[
-                #             {
-                #                 "name": "goToMainMenuIntent",
-                #                 "value": ["menu"],
-                #                 "operator": "CO"
-                #             }
-                #         ]
-                #     )
-                #     print("Get list intent")
-                #     logger.info(list_intent_response)
-                # except ResourceNotFoundException:
-                #     print("No Lex session yet, proceed to create Lex Session")
                 # Lex v2 Runtime 
                 # If zh-CN --> zh_CN ; else en
                 response_lexv2 = lexv2_client.recognize_text(
-                    botId='OLMYBW8DVF',
-                    botAliasId='Z8QRMOFFRB',
+                    botId='YNCEG8NTPX',
+                    botAliasId='9TH12ND1ET',
                     localeId=chatbot_language,
                     sessionId=phone[1:],
                     text=translated_message,
                 )
+                logger.info(response_lexv2)
                 intent_name = response_lexv2['sessionState']['intent']['name']
+                print("Intent: {}".format(intent_name))
+
+                if intent_name == "back2MainMenuIntent":
+                    logger.info(response_lexv2)    
+                    print("Activate back2MainMenuIntent")
+
+                    deleteSessionResponse = lexv2_client.delete_session(
+                        botId = 'YNCEG8NTPX',
+                        botAliasId = '9TH12ND1ET',
+                        localeId = chatbot_language,
+                        sessionId = phone[1:]
+                    )
+                    logger.info(deleteSessionResponse)
+                    message = "hi"
+                    if (identify_Language(message) != chatbot_language):
+                        translate_language = chatbot_language.split("_")[0]
+                        # Amazon Translate message to make mixed language into one
+                        response_translate = translate.translate_text(
+                            Text = message,
+                            SourceLanguageCode = 'auto',
+                            TargetLanguageCode = translate_language
+                        )
+
+                        translated_message = response_translate['TranslatedText']
+                        print("Translated MSG after delete session: {}".format(translated_message))
+                    else:
+                        translated_message = message
+                    print("MSG: {}".format(translated_message))
+                    print("reactivate session: redirect back to main menu")
+                    response_lexv2 = lexv2_client.recognize_text(
+                        botId='YNCEG8NTPX',
+                        botAliasId='9TH12ND1ET',
+                        localeId=chatbot_language,
+                        sessionId=phone[1:],
+                        text=translated_message,
+                    )                    
+                    intent_name = response_lexv2['sessionState']['intent']['name']
+                    print("Intent: {}".format(intent_name))
+
                 
                 if intent_name != 'agentHelpIntent':
-                    logger.info(response_lexv2)
+                    #logger.info(response_lexv2)
                     if 'messages' in response_lexv2:
                         message = response_lexv2['messages'][0]['content'] # Chatbot response
                     else:
