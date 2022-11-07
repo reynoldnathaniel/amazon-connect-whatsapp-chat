@@ -195,8 +195,8 @@ def lambda_handler(event, context):
                     print("MSG: {}".format(translated_message))
                     print("reactivate session: redirect back to main menu")
                     response_lexv2 = lexv2_client.recognize_text(
-                        botId='YNCEG8NTPX',
-                        botAliasId='9TH12ND1ET',
+                        botId='LBZWCASU3V', # WeLend Demo: LBZWCASU3V, SalesKit: YNCEG8NTPX
+                        botAliasId='BX84KD5ORN', # WeLend Demo: BX84KD5ORN, SalesKit: 9TH12ND1ET
                         localeId=chatbot_language,
                         sessionId=phone[1:],
                         text=translated_message,
